@@ -1,16 +1,40 @@
 name: Publish
+
 on:
   release:
     types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-go-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   publish:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          go-version: '1.22'
+          go-version: '1.27'
+          cache: true
+
+      - name: Verify tag format
+        run: |
+          if [[ ! "${{ github.ref_name }}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "ERROR: tag ${{ github.ref_name }} is not semver (vX.Y.Z)"
+            exit 1
+          fi
+
       - run: go build ./...
-      - run: go test ./...
-      - name: Module available
-        run: echo "go get github.com/wiApi/go@${{ github.event.release.tag_name }}"
+      - run: go test -race -count=1 ./...
+
+      # Go proxy picks up the tag automatically — no credentials needed.
+      - name: Trigger Go proxy
+        run: |
+          curl -sf "https://proxy.golang.org/github.com/wiApi/go/@v/${{ github.ref_name }}.info" || true
+          echo "Module available: go get github.com/wiApi/go@${{ github.ref_name }}"

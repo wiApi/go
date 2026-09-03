@@ -1,0 +1,16 @@
+name: Publish
+on:
+  release:
+    types: [published]
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      - run: go build ./...
+      - run: go test ./...
+      - name: Module available
+        run: echo "go get github.com/wiApi/go@${{ github.event.release.tag_name }}"

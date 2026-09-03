@@ -1,7 +1,3 @@
-module github.com/wi-api/go
+module github.com/wiApi/go
 
 go 1.22
-
-require (
-	// zero runtime deps — stdlib only
-)

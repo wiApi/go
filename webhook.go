@@ -8,13 +8,83 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 )
 
-const signatureHeader = "x-wi-signature"
+const (
+	signatureHeader   = "x-wi-signature"
+	signatureV2Header = "x-wi-signature-v2"
 
-// VerifySignature checks that the HMAC-SHA256 signature on a webhook payload
-// matches the given secret. The signature format is "sha256=<hex>".
+	// DefaultToleranceSeconds is the default max age of x-wi-timestamp (5 minutes).
+	DefaultToleranceSeconds = 300
+)
+
+// VerifyOptions tunes [VerifyWebhook]. The zero value means "5 minute tolerance, real clock".
+type VerifyOptions struct {
+	// ToleranceSeconds is the max distance between the signed timestamp and now.
+	// Zero means [DefaultToleranceSeconds].
+	ToleranceSeconds int
+	// Now overrides the clock (unix seconds); for tests. Zero means time.Now().
+	Now int64
+}
+
+// VerifyWebhook verifies a webhook delivery with replay protection.
+//
+// It checks "x-wi-signature-v2: t=<unix seconds>,v1=<hex>", the HMAC-SHA256 of
+// "<t>.<body>", and rejects it when t is further than the tolerance from now: a
+// captured request cannot be replayed later, and a tampered timestamp fails the
+// signature. A delivery with no v2 header (older servers) falls back to the
+// legacy "x-wi-signature" body signature, which has no replay protection. A
+// malformed v2 header is rejected, never downgraded.
+func VerifyWebhook(body []byte, header http.Header, secret string, opts VerifyOptions) bool {
+	v2 := header.Get(signatureV2Header)
+	if v2 == "" {
+		legacy := header.Get(signatureHeader)
+		return legacy != "" && VerifySignature(body, legacy, secret)
+	}
+
+	var ts, v1 string
+	for _, part := range strings.Split(v2, ",") {
+		k, v, _ := strings.Cut(strings.TrimSpace(part), "=")
+		switch k {
+		case "t":
+			ts = v
+		case "v1":
+			v1 = v
+		}
+	}
+	t, err := strconv.ParseInt(ts, 10, 64)
+	if err != nil || v1 == "" {
+		return false
+	}
+	got, err := hex.DecodeString(v1)
+	if err != nil {
+		return false
+	}
+
+	tolerance := int64(opts.ToleranceSeconds)
+	if tolerance == 0 {
+		tolerance = DefaultToleranceSeconds
+	}
+	now := opts.Now
+	if now == 0 {
+		now = time.Now().Unix()
+	}
+	if d := now - t; d > tolerance || -d > tolerance {
+		return false
+	}
+
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(ts))
+	mac.Write([]byte("."))
+	mac.Write(body)
+	return hmac.Equal(mac.Sum(nil), got)
+}
+
+// VerifySignature checks the legacy body-only HMAC-SHA256 signature
+// ("sha256=<hex>", no replay protection). Prefer [VerifyWebhook].
 //
 // Returns false (not an error) when the signature is wrong — that is the
 // expected outcome for invalid requests; treat it as HTTP 401.
@@ -59,8 +129,7 @@ func WebhookHandler(secret string, fn WebhookHandlerFunc) http.Handler {
 			return
 		}
 
-		sig := r.Header.Get(signatureHeader)
-		if !VerifySignature(body, sig, secret) {
+		if !VerifyWebhook(body, r.Header, secret, VerifyOptions{}) {
 			http.Error(w, "invalid signature", http.StatusUnauthorized)
 			return
 		}

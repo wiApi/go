@@ -3,7 +3,6 @@ name: Publish
 on:
   release:
     types: [published]
-      - 'v*'
 
 permissions:
   contents: write

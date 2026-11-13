@@ -146,12 +146,19 @@ Verify manually:
 
 ```go
 body, _ := io.ReadAll(r.Body)
-if !wi.VerifySignature(body, r.Header.Get("x-wi-signature"), []byte(secret)) {
+// x-wi-signature-v2 (HMAC of "<timestamp>.<body>"), 5 minute replay tolerance.
+if !wi.VerifyWebhook(body, r.Header, secret, wi.VerifyOptions{ToleranceSeconds: 300}) {
     http.Error(w, "invalid signature", http.StatusUnauthorized)
     return
 }
 event, err := wi.ParseEvent(body)
 ```
+
+`receipt` events decode into `wi.Receipt` (`Status`, `RawType`, `MessageIDs`).
+
+`disconnected` events decode into `wi.Disconnected`. `WillReconnect` is always set: `true` means the engine reconnects by itself, `false` means the session stays offline until you act (`Resume` names the call). `Reason` is one of `wi.DisconnectReasons()`; a value a newer server adds still decodes, so decide by `WillReconnect` when `!Reason.Known()`.
+
+`pairing.failed` events decode into `wi.PairingFailed` (`Method`, `Reason`, `At`) and `pairing.succeeded` into `wi.PairingSucceeded`. `Reason` is one of `wi.PairingFailureReasons()`; a value a newer server adds still decodes, so treat it like `wi.PairingError` when `!Reason.Known()`.
 
 ## Error handling
 

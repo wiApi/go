@@ -23,18 +23,33 @@ func (e *Error) Error() string {
 func parseErrorResponse(res *http.Response) *Error {
 	e := &Error{Status: res.StatusCode, Message: http.StatusText(res.StatusCode)}
 
+	// Current shape: {"error":{"code","message"}}. The legacy flat shape
+	// {"error":"...","message":"...","code":"..."} is still read.
 	var body struct {
-		Message string `json:"message"`
-		Error   string `json:"error"`
-		Code    string `json:"code"`
+		Message string          `json:"message"`
+		Error   json.RawMessage `json:"error"`
+		Code    string          `json:"code"`
 	}
 	if err := json.NewDecoder(res.Body).Decode(&body); err == nil {
-		if body.Message != "" {
-			e.Message = body.Message
-		} else if body.Error != "" {
-			e.Message = body.Error
+		var nested struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
 		}
-		e.Code = body.Code
+		var flat string
+		switch {
+		case json.Unmarshal(body.Error, &nested) == nil && (nested.Code != "" || nested.Message != ""):
+			if nested.Message != "" {
+				e.Message = nested.Message
+			}
+			e.Code = nested.Code
+		default:
+			if body.Message != "" {
+				e.Message = body.Message
+			} else if json.Unmarshal(body.Error, &flat) == nil && flat != "" {
+				e.Message = flat
+			}
+			e.Code = body.Code
+		}
 	}
 	return e
 }
